@@ -1,0 +1,7 @@
+services:
+  dev:
+    build: .
+    volumes:
+      - .:/app
+      - /app/node_modules   # prevent host node_modules from overriding container's
+    # No ports needed — this is a pure build environment
