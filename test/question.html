@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<body>
+  <div id="app_TestingPage_CoreTestingDisplay_t24qtext">
+    Wie verhält sich ein ordnungsgemäß eingestelltes Fahrzeug auf ebener Straße,
+    wenn man das Lenkrad loslässt?
+  </div>
+  <div id="q1_answertext">Es fährt geradeaus.</div>
+  <div id="q2_answertext">Es zieht nach links.</div>
+  <div id="q3_answertext">Es zieht nach rechts.</div>
+
+  <script>
+    const type = new URLSearchParams(location.search).get('type') || 'mc';
+    function removeAnswers() {
+      document.querySelectorAll('[id$="_answertext"]').forEach(el => el.remove());
+    }
+    if (type === 'grouped-mc') {
+      // Inject the hint stem before the answer divs, mimicking t24qhint1
+      const stem = document.createElement('div');
+      stem.id = 'app_TestingPage_CoreTestingDisplay_t24qhint1';
+      stem.textContent = 'Wenn der Eingeholte';
+      document.querySelector('#q1_answertext').before(stem);
+      // Replace answer texts with stem-continuation fragments (no stem prefix)
+      document.querySelector('#q1_answertext').textContent = '- seine Geschwindigkeit stark verringert';
+      document.querySelector('#q2_answertext').textContent = '- zum Überholen ausschert';
+      document.querySelector('#q3_answertext').textContent = '- plötzlich beschleunigt';
+      document.getElementById('app_TestingPage_CoreTestingDisplay_t24qtext').textContent = 'Wann wird ein Überholender gefährdet?';
+    } else if (type === 'numeric') {
+      removeAnswers();
+    } else if (type === 'transition') {
+      setTimeout(removeAnswers, 2000); // simulate stale-DOM window
+    } else if (type === 'video') {
+      // Start with the video-instruction text and no answers, then after 4 s
+      // replace with the real question + answers (simulates video finishing).
+      const qEl = document.getElementById('app_TestingPage_CoreTestingDisplay_t24qtext');
+      qEl.textContent = 'Bitte starten Sie den Film, um sich mit der Situation vertraut zu machen.';
+      removeAnswers();
+      setTimeout(() => {
+        qEl.textContent = 'Was müssen Sie beachten, wenn Sie an diesem Fahrzeug vorbeifahren wollen?';
+        ['Sie dürfen nur vorbeifahren, wenn die Straße frei ist.',
+         'Sie müssen dem Fahrzeug ausreichend Platz lassen.',
+         'Sie müssen die Geschwindigkeit erheblich reduzieren.']
+          .forEach((text, i) => {
+            const div = document.createElement('div');
+            div.id = 'q' + (i + 1) + '_answertext';
+            div.textContent = text;
+            document.body.appendChild(div);
+          });
+      }, 4000);
+    }
+  </script>
+</body>
+</html>

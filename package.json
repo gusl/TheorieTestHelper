@@ -6,7 +6,8 @@
   "scripts": {
     "build": "rm -rf dist && mkdir -p dist/icons && cp manifest.json content.js background.js sidebar.css popup.html popup.js dist/ && cp -r icons/* dist/icons/ 2>/dev/null || true && echo 'Build complete → dist/'",
     "watch": "chokidar 'manifest.json' 'content.js' 'background.js' 'sidebar.css' 'popup.html' 'popup.js' 'icons/**' --initial -c 'npm run build'",
-    "zip": "npm run build && cd dist && zip -r ../theorie-test-helper.zip . && echo 'Packaged → theorie-test-helper.zip'"
+    "zip": "npm run build && cd dist && zip -r ../theorie-test-helper.zip . && echo 'Packaged → theorie-test-helper.zip'",
+    "serve": "npx --yes http-server . -p 8080 -c-1 --cors"
   },
   "devDependencies": {
     "chokidar-cli": "^3.0.0"

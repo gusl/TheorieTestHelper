@@ -9,8 +9,10 @@
 (function () {
   "use strict";
 
-  const SEL_QUESTION = "#app_TestingPage_CoreTestingDisplay_t24qtext";
-  const SEL_ANSWERS  = "[id$='_answertext']";
+  const SEL_QUESTION       = "#app_TestingPage_CoreTestingDisplay_t24qtext";
+  const SEL_ANSWERS        = "[id$='_answertext']";
+  const SEL_ANSWER_STEM    = "#app_TestingPage_CoreTestingDisplay_t24qhint1";
+  const SEL_QUESTION_IMAGE = "#app_TestingPage_CoreTestingDisplay_t24qpic img";
   const MSG_PREFIX   = "tth-";
 
   // ── Utilities ─────────────────────────────────────────────────────────────
@@ -36,6 +38,10 @@
   // ══════════════════════════════════════════════════════════════════════════
 
   let _shadow = null;
+  let _lastTranslation = null;
+  let _chatHistory = [];      // [{role, content}, …]
+  let _chatContext  = "";     // system-message text built from current question
+  let _chatModel   = "gpt-4o-mini"; // escalates to "gpt-4o" when user tags @gpt4o
 
   function getShadow() {
     if (_shadow) return _shadow;
@@ -66,12 +72,12 @@
           flex-direction: column;
           width: 500px;
           max-width: calc(100vw - 24px);
-          height: 210px;
+          height: 420px;
           background: #fff;
           border: 2px solid #3b82f6;
           border-radius: 8px 8px 0 0;
           box-shadow: 0 4px 20px rgba(0,0,0,.25);
-          overflow: hidden;
+          overflow: clip;
           font: 14px/1.4 system-ui, sans-serif;
           color: #1f2937;
         }
@@ -154,17 +160,250 @@
           color: #1f2937;
         }
         .ans-label { font-weight: 700; color: #3b82f6; margin-right: 4px; }
+        #tth-footer {
+          display: none;
+          border-top: 1px solid #e5e7eb;
+          padding: 8px 14px;
+          background: #f9fafb;
+          flex-shrink: 0;
+          gap: 8px;
+        }
+        .tth-ask-btn {
+          background: #3b82f6;
+          color: #fff;
+          border: none;
+          border-radius: 5px;
+          padding: 5px 12px;
+          font: 600 12px/1 system-ui, sans-serif;
+          cursor: pointer;
+        }
+        .tth-ask-btn:disabled { opacity: .6; cursor: default; }
+        /* ── Chat view ── */
+        #tth-chat {
+          display: none;
+          flex-direction: column;
+          flex: 1;
+          min-height: 0;
+        }
+        #tth-chat-bar {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 5px 14px;
+          background: #eff6ff;
+          border-bottom: 1px solid #bfdbfe;
+          flex-shrink: 0;
+        }
+        #tth-back-btn {
+          background: none;
+          border: none;
+          color: #3b82f6;
+          font: 600 12px/1 system-ui, sans-serif;
+          cursor: pointer;
+          padding: 0;
+        }
+        #tth-chat-label {
+          font: 600 12px/1 system-ui, sans-serif;
+          color: #1e40af;
+        }
+        #tth-chat-messages {
+          flex: 1;
+          overflow-y: auto;
+          padding: 10px 14px;
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+          min-height: 0;
+        }
+        .tth-msg {
+          max-width: 88%;
+          border-radius: 10px;
+          padding: 7px 11px;
+          font: 12px/1.5 system-ui, sans-serif;
+          white-space: pre-wrap;
+          word-break: break-word;
+        }
+        .tth-msg-user {
+          align-self: flex-end;
+          background: #3b82f6;
+          color: #fff;
+          border-bottom-right-radius: 3px;
+        }
+        .tth-msg-ai {
+          align-self: flex-start;
+          background: #f3f4f6;
+          color: #1f2937;
+          border-bottom-left-radius: 3px;
+        }
+        .tth-msg-ai2 {
+          align-self: flex-start;
+          background: #f0fdf4;
+          color: #14532d;
+          border: 1px solid #bbf7d0;
+          border-bottom-left-radius: 3px;
+        }
+        .tth-msg-ai2::before {
+          content: "gpt-4o · ";
+          font-weight: 700;
+          opacity: .6;
+        }
+        .tth-msg-thinking {
+          align-self: flex-start;
+          background: #f3f4f6;
+          color: #9ca3af;
+          font-style: italic;
+          border-bottom-left-radius: 3px;
+        }
+        .tth-msg-context {
+          align-self: stretch;
+          background: #eff6ff;
+          border: 1px solid #bfdbfe;
+          color: #1e3a5f;
+          border-radius: 6px;
+          font-size: 12px;
+          line-height: 1.6;
+          max-width: 100%;
+        }
+        .tth-msg-context .ctx-question {
+          font-weight: 600;
+          margin-bottom: 4px;
+          display: block;
+        }
+        .tth-msg-context .ctx-answer { display: block; }
+        .tth-msg-context .ctx-label { font-weight: 700; margin-right: 4px; }
+        #tth-chat-quick {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+          padding: 6px 14px 0;
+          flex-shrink: 0;
+        }
+        .tth-quick-btn {
+          background: #f3f4f6;
+          color: #374151;
+          border: 1px solid #d1d5db;
+          border-radius: 12px;
+          padding: 3px 10px;
+          font: 11px/1.4 system-ui, sans-serif;
+          cursor: pointer;
+        }
+        .tth-quick-btn:hover { background: #e5e7eb; }
+        .tth-quick-btn:disabled { opacity: .5; cursor: default; }
+        #tth-chat-input-row {
+          display: flex;
+          gap: 6px;
+          padding: 8px 14px;
+          border-top: 1px solid #e5e7eb;
+          flex-shrink: 0;
+          background: #fff;
+        }
+        #tth-chat-input {
+          flex: 1;
+          border: 1px solid #d1d5db;
+          border-radius: 6px;
+          padding: 6px 10px;
+          font: 13px/1 system-ui, sans-serif;
+          color: #1f2937;
+          outline: none;
+        }
+        #tth-chat-input:focus { border-color: #3b82f6; }
+        #tth-chat-send {
+          background: #3b82f6;
+          color: #fff;
+          border: none;
+          border-radius: 6px;
+          padding: 6px 14px;
+          font: 600 12px/1 system-ui, sans-serif;
+          cursor: pointer;
+          flex-shrink: 0;
+        }
+        #tth-chat-send:disabled { opacity: .5; cursor: default; }
+        /* ── Cards button ── */
+        #tth-cards-btn {
+          background: rgba(255,255,255,.2); border: 1px solid rgba(255,255,255,.5);
+          color: #fff; border-radius: 4px; padding: 2px 8px;
+          font: 600 11px/1 system-ui; cursor: pointer;
+          margin-left: auto; margin-right: 8px;
+        }
+        /* ── Flashcard panel ── */
+        #tth-flashcards {
+          display: none; flex-direction: column; flex: 1; min-height: 0;
+        }
+        #tth-fc-bar {
+          display: flex; align-items: center; gap: 8px; padding: 5px 14px;
+          background: #eff6ff; border-bottom: 1px solid #bfdbfe; flex-shrink: 0;
+        }
+        #tth-fc-back {
+          background: none; border: none; color: #3b82f6;
+          font: 600 12px/1 system-ui; cursor: pointer; padding: 0;
+        }
+        #tth-fc-label { font: 600 12px/1 system-ui; color: #1e40af; }
+        #tth-fc-list {
+          flex: 1; overflow-y: auto; padding: 10px 14px;
+          display: flex; flex-direction: column; gap: 6px;
+        }
+        .tth-fc-row {
+          display: flex; align-items: center; gap: 8px;
+          background: #f3f4f6; border: 1px solid #e5e7eb;
+          border-radius: 5px; padding: 5px 9px;
+          font: 12px/1.4 system-ui;
+        }
+        .tth-fc-de { font-weight: 700; color: #1f2937; }
+        .tth-fc-en { color: #6b7280; flex: 1; }
+        .tth-fc-del {
+          background: none; border: none; color: #dc2626;
+          font-size: 14px; cursor: pointer; padding: 0 2px; flex-shrink: 0;
+        }
+        .tth-fc-empty { color: #9ca3af; font-style: italic; font-size: 13px; text-align: center; padding-top: 20px; }
+        #tth-fc-search-row {
+          padding: 6px 14px; flex-shrink: 0; border-bottom: 1px solid #e5e7eb;
+        }
+        #tth-fc-search {
+          width: 100%; box-sizing: border-box; padding: 4px 8px;
+          border: 1px solid #d1d5db; border-radius: 4px;
+          font: 12px/1.4 system-ui; outline: none;
+        }
+        #tth-fc-search:focus { border-color: #3b82f6; }
       </style>
       <button id="tth-toggle">EN ▲</button>
       <div id="tth-sidebar">
         <div id="tth-header">
           <span id="tth-title">TheorieTestHelper</span>
+          <button id="tth-cards-btn">Cards</button>
           <button id="tth-close">▼</button>
         </div>
         <div id="tth-body">
           <div id="tth-spinner">Translating…</div>
           <div id="tth-content"></div>
           <div id="tth-error"></div>
+        </div>
+        <div id="tth-footer">
+          <button id="tth-ask-ai" class="tth-ask-btn">Ask the AI</button>
+        </div>
+        <div id="tth-chat">
+          <div id="tth-chat-bar">
+            <button id="tth-back-btn">← Back</button>
+            <span id="tth-chat-label">Chat with AI</span>
+          </div>
+          <div id="tth-chat-messages"></div>
+          <div id="tth-chat-quick">
+            <button class="tth-quick-btn" id="tth-quick-en">Ask in English</button>
+            <button class="tth-quick-btn" id="tth-quick-de">Auf Deutsch fragen</button>
+          </div>
+          <div id="tth-chat-input-row">
+            <input id="tth-chat-input" type="text" placeholder="Ask a follow-up… (or add @gpt4o)">
+            <button id="tth-chat-send">Send</button>
+          </div>
+        </div>
+        <div id="tth-flashcards">
+          <div id="tth-fc-bar">
+            <button id="tth-fc-back">← Back</button>
+            <span id="tth-fc-label">Flashcards</span>
+          </div>
+          <div id="tth-fc-search-row">
+            <input id="tth-fc-search" type="search" placeholder="Search German or English…">
+          </div>
+          <div id="tth-fc-list"></div>
         </div>
       </div>
     `;
@@ -180,6 +419,164 @@
     );
     _shadow.getElementById("tth-close").addEventListener("click", closePanel);
 
+    // ── Chat helpers ────────────────────────────────────────────────────────
+
+    function appendMsg(role, text) {
+      const s = _shadow;
+      const msgs = s.getElementById("tth-chat-messages");
+      const div = document.createElement("div");
+      div.className = "tth-msg tth-msg-" + role;
+      div.textContent = text;
+      msgs.appendChild(div);
+      msgs.scrollTop = msgs.scrollHeight;
+      return div;
+    }
+
+    function setChatInputBusy(busy) {
+      _shadow.getElementById("tth-chat-input").disabled = busy;
+      _shadow.getElementById("tth-chat-send").disabled = busy;
+      _shadow.getElementById("tth-quick-en").disabled = busy;
+      _shadow.getElementById("tth-quick-de").disabled = busy;
+    }
+
+    function openChat() {
+      if (!_lastTranslation) return;
+      const { question, answers } = _lastTranslation;
+      _chatHistory = [];
+      _chatModel = "gpt-4o-mini";
+      _chatContext = `You are a German driving theory expert helping a student.
+Question: ${question}
+Answer options:
+${answers.map((a, i) => `${String.fromCharCode(65 + i)}. ${a}`).join("\n")}
+One or more answers may be correct; at least one is always correct. Base your answers on the German traffic manual (Straßenverkehrs-Ordnung and Fahrschule guidelines). Be concise. If the user tells you your answer is wrong, trust them and revise your explanation accordingly. Respond in whatever language the user writes in.
+In your very first response, start with either "I can see the image." or "I don't see an image." on its own line. Then on a new line add exactly: "Tip: add @gpt4o to any message to escalate to GPT-4o."`;
+
+      // Switch views
+      _shadow.getElementById("tth-body").style.display = "none";
+      _shadow.getElementById("tth-footer").style.display = "none";
+      const msgs = _shadow.getElementById("tth-chat-messages");
+      msgs.innerHTML = "";
+
+      // Render the translation as a pinned context card at the top of the chat
+      const card = document.createElement("div");
+      card.className = "tth-msg tth-msg-context";
+      card.innerHTML =
+        `<span class="ctx-question">${escapeHtml(question)}</span>` +
+        answers.map((a, i) =>
+          `<span class="ctx-answer"><span class="ctx-label">${String.fromCharCode(65 + i)}.</span>${escapeHtml(a)}</span>`
+        ).join("");
+      msgs.appendChild(card);
+
+      _shadow.getElementById("tth-chat").style.display = "flex";
+      _shadow.getElementById("tth-chat-input").value = "";
+      _shadow.getElementById("tth-chat-input").focus();
+    }
+
+    function closeChat() {
+      _shadow.getElementById("tth-chat").style.display = "none";
+      _shadow.getElementById("tth-body").style.display = "flex";
+      if (_lastTranslation) _shadow.getElementById("tth-footer").style.display = "block";
+      _chatHistory = [];
+    }
+
+    function dispatchChatMessage(text) {
+      if (/@gpt4o/i.test(text) && _chatModel !== "gpt-4o") {
+    _chatModel = "gpt-4o";
+    _chatHistory = []; // start fresh so GPT-4o focuses on the current question
+  }
+      const contentText = text.replace(/@gpt4o/gi, "").trim() || text;
+      appendMsg("user", text);
+      _chatHistory.push({ role: "user", content: contentText });
+      setChatInputBusy(true);
+      const thinking = appendMsg("thinking", _chatModel === "gpt-4o" ? "Thinking (GPT-4o)…" : "Thinking…");
+      chrome.runtime.sendMessage(
+        { type: "chat", systemContext: _chatContext, history: _chatHistory,
+          imageBase64: _lastTranslation?.imageBase64, model: _chatModel },
+        (response) => {
+          thinking.remove();
+          setChatInputBusy(false);
+          const bubbleClass = _chatModel === "gpt-4o" ? "ai2" : "ai";
+          if (chrome.runtime.lastError || response?.error) {
+            appendMsg(bubbleClass, "Error: " + (response?.error || chrome.runtime.lastError.message));
+          } else {
+            const reply = response.reply || "";
+            appendMsg(bubbleClass, reply);
+            _chatHistory.push({ role: "assistant", content: reply });
+          }
+          _shadow.getElementById("tth-chat-input").focus();
+        }
+      );
+    }
+
+    _shadow.getElementById("tth-ask-ai").addEventListener("click", () => openChat());
+    _shadow.getElementById("tth-back-btn").addEventListener("click", closeChat);
+    _shadow.getElementById("tth-quick-en").addEventListener("click", () =>
+      dispatchChatMessage("Which answer(s) are correct, and why?"));
+    _shadow.getElementById("tth-quick-de").addEventListener("click", () =>
+      dispatchChatMessage("Welche Antwort(en) sind richtig, und warum?"));
+
+    // ── Flashcard panel ─────────────────────────────────────────────────────
+
+    function openFlashcards() {
+      _shadow.getElementById("tth-body").style.display = "none";
+      _shadow.getElementById("tth-footer").style.display = "none";
+      _shadow.getElementById("tth-chat").style.display = "none";
+      _shadow.getElementById("tth-flashcards").style.display = "flex";
+      _shadow.getElementById("tth-fc-search").value = "";
+      renderFlashcards();
+    }
+
+    function closeFlashcards() {
+      _shadow.getElementById("tth-flashcards").style.display = "none";
+      _shadow.getElementById("tth-body").style.display = "flex";
+      if (_lastTranslation) _shadow.getElementById("tth-footer").style.display = "block";
+    }
+
+    function renderFlashcards() {
+      const list = _shadow.getElementById("tth-fc-list");
+      const query = (_shadow.getElementById("tth-fc-search").value || "").trim().toLowerCase();
+      list.innerHTML = "";
+      chrome.runtime.sendMessage({ type: "get-flashcards" }, (res) => {
+        const allCards = res?.flashcards || [];
+        const cards = query
+          ? allCards.filter(({ german, english }) =>
+              german.toLowerCase().includes(query) || english.toLowerCase().includes(query))
+          : allCards;
+        if (!allCards.length) {
+          list.innerHTML = '<div class="tth-fc-empty">No flashcards yet.<br>Click a German word on the page to add one.</div>';
+          return;
+        }
+        if (!cards.length) {
+          list.innerHTML = '<div class="tth-fc-empty">No matches.</div>';
+          return;
+        }
+        cards.forEach(({ german, english }) => {
+          const row = document.createElement("div");
+          row.className = "tth-fc-row";
+          row.innerHTML = `<span class="tth-fc-de">${escapeHtml(german)}</span><span class="tth-fc-en">${escapeHtml(english)}</span><button class="tth-fc-del" title="Remove">✕</button>`;
+          row.querySelector(".tth-fc-del").addEventListener("click", () => {
+            chrome.runtime.sendMessage({ type: "remove-flashcard", german }, () => renderFlashcards());
+          });
+          list.appendChild(row);
+        });
+      });
+    }
+
+    _shadow.getElementById("tth-cards-btn").addEventListener("click", openFlashcards);
+    _shadow.getElementById("tth-fc-back").addEventListener("click", closeFlashcards);
+    _shadow.getElementById("tth-fc-search").addEventListener("input", renderFlashcards);
+
+    const inputEl = _shadow.getElementById("tth-chat-input");
+    const sendBtn = _shadow.getElementById("tth-chat-send");
+    function submitInput() {
+      const text = inputEl.value.trim();
+      if (!text) return;
+      inputEl.value = "";
+      dispatchChatMessage(text);
+    }
+    sendBtn.addEventListener("click", submitInput);
+    inputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") submitInput(); });
+
     return _shadow;
   }
 
@@ -187,27 +584,63 @@
     const s = getShadow();
     s.getElementById("tth-sidebar").style.display = "flex";
     s.getElementById("tth-toggle").textContent = "EN ▼";
+    s.getElementById("tth-chat").style.display = "none";
+    s.getElementById("tth-body").style.display = "flex";
     s.getElementById("tth-spinner").style.display = "block";
     s.getElementById("tth-content").style.display = "none";
     s.getElementById("tth-error").style.display = "none";
+    s.getElementById("tth-footer").style.display = "none";
   }
 
-  function showTranslation(question, answers) {
+  function showTranslation(question, answers, imageBase64) {
     const s = getShadow();
     s.getElementById("tth-spinner").style.display = "none";
     s.getElementById("tth-error").style.display = "none";
+    // Show footer with Ask button only for MC questions; reset any prior ask result
+    const footer = s.getElementById("tth-footer");
+    // Close chat if open (new question arrived)
+    s.getElementById("tth-chat").style.display = "none";
+    s.getElementById("tth-body").style.display = "flex";
+    if (answers.length) {
+      _lastTranslation = { question, answers, imageBase64 };
+      _chatHistory = [];
+      footer.style.display = "block";
+    } else {
+      _lastTranslation = null;
+      footer.style.display = "none";
+    }
     const content = s.getElementById("tth-content");
-    const answersHtml = answers
-      .map((a, i) => `<li><span class="ans-label">${String.fromCharCode(65 + i)}.</span>${escapeHtml(a)}</li>`)
-      .join("");
-    content.innerHTML = `<p id="tth-question">${escapeHtml(question)}</p><ul id="tth-answers">${answersHtml}</ul>`;
+    if (answers.length) {
+      const answersHtml = answers
+        .map((a, i) => `<li><span class="ans-label">${String.fromCharCode(65 + i)}.</span>${escapeHtml(a)}</li>`)
+        .join("");
+      content.innerHTML = `<p id="tth-question">${escapeHtml(question)}</p><ul id="tth-answers">${answersHtml}</ul>`;
+    } else {
+      content.innerHTML = `<p id="tth-question" style="flex:1;border-right:none;">${escapeHtml(question)}</p>
+                           <p id="tth-numeric-note" style="font-style:italic;color:#6b7280;font-size:12px;align-self:center;">(numeric answer)</p>`;
+    }
     content.style.display = "flex";
+  }
+
+  function showInfo(msg) {
+    const s = getShadow();
+    s.getElementById("tth-sidebar").style.display = "flex";
+    s.getElementById("tth-toggle").textContent = "EN ▼";
+    s.getElementById("tth-chat").style.display = "none";
+    s.getElementById("tth-body").style.display = "flex";
+    s.getElementById("tth-spinner").style.display = "none";
+    s.getElementById("tth-content").style.display = "none";
+    s.getElementById("tth-footer").style.display = "none";
+    const err = s.getElementById("tth-error");
+    err.style.cssText = "display:block;color:#92400e;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:8px 10px;font-size:12px;line-height:1.5;width:100%;";
+    err.textContent = msg;
   }
 
   function showError(msg) {
     const s = getShadow();
     s.getElementById("tth-spinner").style.display = "none";
     s.getElementById("tth-content").style.display = "none";
+    s.getElementById("tth-footer").style.display = "none";
     const err = s.getElementById("tth-error");
     err.textContent = msg;
     err.style.display = "block";
@@ -252,6 +685,12 @@
     setTimeout(applyShift, 1500);
   }
 
+  function minimizePanel() {
+    if (!_shadow) return;
+    _shadow.getElementById("tth-sidebar").style.display = "none";
+    _shadow.getElementById("tth-toggle").textContent = "EN ▲";
+  }
+
   function initParentFrame() {
     pushContentLeft();
     window.addEventListener("message", (event) => {
@@ -259,8 +698,10 @@
       if (!data?.type?.startsWith(MSG_PREFIX)) return;
       switch (data.type) {
         case "tth-spinner":     showSpinner(); break;
-        case "tth-translation": showTranslation(data.question, data.answers); break;
+        case "tth-translation": showTranslation(data.question, data.answers, data.imageBase64); break;
+        case "tth-info":        showInfo(data.message); break;
         case "tth-error":       showError(data.message); break;
+        case "tth-minimize":    minimizePanel(); break;
       }
     });
   }
@@ -273,62 +714,164 @@
     window.parent.postMessage(msg, "*");
   }
 
+  async function captureVisual() {
+    // Photo question
+    const img = document.querySelector(SEL_QUESTION_IMAGE);
+    console.log("[TTH] captureVisual img:", img, "complete:", img?.complete, "naturalWidth:", img?.naturalWidth, "src:", img?.src);
+    if (img && img.complete && img.naturalWidth > 0 && img.getBoundingClientRect().width > 0) {
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        canvas.getContext("2d").drawImage(img, 0, 0);
+        const b64 = canvas.toDataURL("image/jpeg", 0.85).split(",")[1];
+        console.log("[TTH] captureVisual: canvas success, b64 length:", b64?.length);
+        return b64;
+      } catch (e) {
+        // Canvas tainted (cross-origin) — take a tab screenshot instead
+        console.log("[TTH] captureVisual: canvas tainted, requesting tab screenshot");
+        const res = await Promise.race([
+          new Promise(resolve => chrome.runtime.sendMessage({ type: "capture-tab" }, resolve)),
+          new Promise(resolve => setTimeout(() => resolve(null), 5000)),
+        ]);
+        return res?.dataUrl || null;
+      }
+    }
+    console.log("[TTH] captureVisual: no image found or not loaded");
+    // Video question — capture last frame
+    const video = document.querySelector("video");
+    if (video && video.videoWidth > 0) {
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext("2d").drawImage(video, 0, 0);
+        return canvas.toDataURL("image/jpeg", 0.85).split(",")[1];
+      } catch (e) { /* tainted — fall through */ }
+    }
+    return null;
+  }
+
   function parseQuestion() {
     const questionEl = document.querySelector(SEL_QUESTION);
     if (!questionEl) return null;
     const questionText = questionEl.textContent.trim();
     if (!questionText || questionText === "Fragentext?") return null;
     const answerEls = document.querySelectorAll(SEL_ANSWERS);
-    if (!answerEls.length) return null;
+    const stemEl = document.querySelector(SEL_ANSWER_STEM);
+    const stem = stemEl?.textContent.trim() || "";
     return {
       question: questionText,
-      answers: Array.from(answerEls).map(el => el.textContent.trim()).filter(Boolean),
+      answers: Array.from(answerEls)
+        .filter(el => {
+          if (el.hidden) return false;
+          const cs = getComputedStyle(el);
+          if (cs.display === "none" || cs.visibility === "hidden" || cs.visibility === "collapse") return false;
+          if (el.getBoundingClientRect().height === 0) return false;
+          return true;
+        })
+        .map(el => el.textContent.trim())
+        .filter(Boolean)
+        .map(a => stem ? stem + " " + a : a),
+      // answers may be empty — that's OK for numeric questions
     };
   }
 
   const MAX_RETRIES = 6;
 
+  // Video questions show an instruction to watch the film before the real question appears.
+  // Detect this so we don't burn an API call on the instruction text.
+  function isVideoInstruction(text) {
+    return /bitte starten sie den film|video starten|film starten/i.test(text);
+  }
+
   async function translate() {
+    const seq = ++_translateSeq;
     postToParent({ type: "tth-spinner" });
-
-    let parsed = null;
-    for (let i = 0; i < MAX_RETRIES; i++) {
-      parsed = parseQuestion();
-      if (parsed) break;
-      await new Promise(r => setTimeout(r, 500));
-    }
-
-    if (!parsed) {
-      postToParent({ type: "tth-error", message: "Could not find question/answers in the page DOM." });
-      return;
-    }
-
-    chrome.runtime.sendMessage(
-      { type: "translate", question: parsed.question, answers: parsed.answers },
-      (response) => {
-        if (chrome.runtime.lastError) {
-          postToParent({ type: "tth-error", message: "Extension error: " + chrome.runtime.lastError.message });
-          return;
-        }
-        if (response?.error) {
-          postToParent({ type: "tth-error", message: "Translation error: " + response.error });
-          return;
-        }
-        postToParent({ type: "tth-translation", question: response.question, answers: response.answers });
+    try {
+      // Wait for the question text itself
+      let parsed = null;
+      for (let i = 0; i < MAX_RETRIES; i++) {
+        parsed = parseQuestion();
+        if (parsed) break;
+        await new Promise(r => setTimeout(r, 500));
       }
-    );
+
+      if (!parsed) {
+        postToParent({ type: "tth-error", message: "Could not find question in the page DOM." });
+        return;
+      }
+
+      if (isVideoInstruction(parsed.question)) {
+        postToParent({ type: "tth-info", message: "Watch the video — the question will appear automatically once it loads." });
+        return;
+      }
+
+      // If no answers yet, wait briefly to see if they appear (multiple-choice loads async)
+      // but don't wait forever — numeric questions have no answers at all.
+      // Snapshot existing answer elements first — they may be leftovers from the previous question.
+      if (!parsed.answers.length) {
+        const preWaitEls = new Set(Array.from(document.querySelectorAll(SEL_ANSWERS)));
+        await new Promise(r => setTimeout(r, 800));
+        const reParsed = parseQuestion();
+        if (reParsed?.answers.length > 0) {
+          // Only accept answers if at least one element is NEW (not a pre-existing leftover)
+          const hasNewEl = Array.from(document.querySelectorAll(SEL_ANSWERS)).some(el => !preWaitEls.has(el));
+          if (hasNewEl) parsed = reParsed;
+        }
+      }
+
+      const imageBase64 = await captureVisual();
+
+      _lastGerman = { question: parsed.question, answers: parsed.answers };
+      _lastEnglish = null;
+
+      chrome.runtime.sendMessage(
+        { type: "translate", question: parsed.question, answers: parsed.answers, imageBase64 },
+        (response) => {
+          if (seq !== _translateSeq) return;
+          if (chrome.runtime.lastError) {
+            postToParent({ type: "tth-error", message: "Extension error: " + chrome.runtime.lastError.message });
+            return;
+          }
+          if (response?.error) {
+            postToParent({ type: "tth-error", message: "Translation error: " + response.error });
+            return;
+          }
+          _lastEnglish = { question: response.question, answers: response.answers };
+          postToParent({ type: "tth-translation", question: response.question, answers: response.answers, imageBase64 });
+        }
+      );
+    } catch (err) {
+      if (seq === _translateSeq) {
+        postToParent({ type: "tth-error", message: "Unexpected error: " + err.message });
+      }
+    }
   }
 
   let debounceTimer = null;
+  let minimizeTimer = null;
   let lastQuestionText = null;
+  let _translateSeq = 0;     // incremented on each translate() call; guards stale callbacks
+  let _lastGerman  = null;   // { question, answers } — raw German text from last parse
+  let _lastEnglish = null;   // { question, answers } — English translation of same question
 
   function onMutation() {
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       const el = document.querySelector(SEL_QUESTION);
-      if (!el) return;
+      if (!el) {
+        minimizeTimer = minimizeTimer || setTimeout(() => {
+          postToParent({ type: "tth-minimize" });
+          minimizeTimer = null;
+        }, 2000);
+        return;
+      }
+      clearTimeout(minimizeTimer);
+      minimizeTimer = null;
       const text = el.textContent.trim();
-      if (!text || text === lastQuestionText || text === "Fragentext?") return;
+      if (!text || text === "Fragentext?") return;
+      if (text === lastQuestionText && !isVideoInstruction(text)) return;
       lastQuestionText = text;
       translate();
     }, 400);
@@ -339,9 +882,137 @@
     observer.observe(document.body, { childList: true, subtree: true, characterData: true });
   }
 
+  // ── Word-click tooltip ──────────────────────────────────────────────────
+
+  function injectTooltipStyles() {
+    if (document.getElementById("tth-tooltip-style")) return;
+    const s = document.createElement("style");
+    s.id = "tth-tooltip-style";
+    s.textContent = `
+      #tth-word-tooltip {
+        position: fixed; z-index: 2147483647;
+        background: #fff; border: 1px solid #3b82f6; border-radius: 8px;
+        box-shadow: 0 4px 16px rgba(0,0,0,.2);
+        padding: 10px 14px; min-width: 160px; max-width: 260px;
+        font: 13px/1.4 system-ui, sans-serif; color: #1f2937;
+      }
+      #tth-word-tooltip .ttw-word  { font-weight: 700; font-size: 14px; display: block; margin-bottom: 4px; }
+      #tth-word-tooltip .ttw-trans {
+        display: block; width: 100%; margin-bottom: 10px; box-sizing: border-box;
+        border: 1px solid #d1d5db; border-radius: 4px; padding: 3px 6px;
+        font: 13px/1.4 system-ui, sans-serif; color: #374151;
+      }
+      #tth-word-tooltip .ttw-trans:disabled {
+        background: transparent; border-color: transparent; color: #6b7280; padding-left: 0;
+      }
+      #tth-word-tooltip .ttw-add   {
+        background: #3b82f6; color: #fff; border: none; border-radius: 5px;
+        padding: 4px 10px; font: 600 12px/1 system-ui; cursor: pointer;
+      }
+      #tth-word-tooltip .ttw-add:disabled { opacity:.6; cursor:default; }
+      #tth-word-tooltip .ttw-close {
+        position: absolute; top: 6px; right: 8px;
+        background: none; border: none; color: #9ca3af; font-size: 14px; cursor: pointer;
+      }
+    `;
+    document.head.appendChild(s);
+  }
+
+  function wordAt(x, y) {
+    const range = document.caretRangeFromPoint(x, y);
+    if (!range) return "";
+    if (range.startContainer?.parentElement?.closest("button, input, select, textarea, a, img, video")) return "";
+    try { range.expand("word"); } catch (e) { return ""; }
+    return range.toString().replace(/[^A-Za-zÄÖÜäöüß\-]/g, "").trim();
+  }
+
+  function removeWordTooltip() {
+    document.getElementById("tth-word-tooltip")?.remove();
+  }
+
+  function showWordTooltip(word, x, y) {
+    removeWordTooltip();
+    injectTooltipStyles();
+    const tip = document.createElement("div");
+    tip.id = "tth-word-tooltip";
+    tip.innerHTML = `
+      <button class="ttw-close">✕</button>
+      <span class="ttw-word">${word.replace(/&/g,"&amp;").replace(/</g,"&lt;")}</span>
+      <input class="ttw-trans" type="text" placeholder="Translating…" disabled>
+      <button class="ttw-add" disabled>Add to flashcards</button>
+    `;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    tip.style.left = Math.min(x + 12, vw - 280) + "px";
+    tip.style.top  = Math.min(y + 12, vh - 120) + "px";
+    document.body.appendChild(tip);
+
+    tip.querySelector(".ttw-close").addEventListener("click", removeWordTooltip);
+
+    // Find the German sentence containing the word and its English equivalent
+    let germanContext = null, englishContext = null;
+    if (_lastGerman) {
+      const parts = [_lastGerman.question, ..._lastGerman.answers];
+      const idx = parts.findIndex(p => p.toLowerCase().includes(word.toLowerCase()));
+      if (idx >= 0) {
+        germanContext = parts[idx];
+        const englishParts = _lastEnglish ? [_lastEnglish.question, ..._lastEnglish.answers] : [];
+        englishContext = englishParts[idx] || null;
+      }
+    }
+
+    chrome.runtime.sendMessage({ type: "word-translate", word, germanContext, englishContext }, (res) => {
+      if (!tip.isConnected) return;
+      const transInput = tip.querySelector(".ttw-trans");
+      if (res?.error || !res?.translation) {
+        transInput.placeholder = res?.error || "Translation failed.";
+        return;
+      }
+      transInput.value = res.translation;
+      transInput.disabled = false;
+      const addBtn = tip.querySelector(".ttw-add");
+      addBtn.disabled = false;
+      addBtn.addEventListener("click", () => {
+        const english = transInput.value.trim();
+        chrome.runtime.sendMessage({ type: "add-flashcard", german: word, english }, (r) => {
+          if (r?.duplicate) {
+            addBtn.textContent = "Already saved";
+            addBtn.disabled = true;
+          } else {
+            removeWordTooltip();
+          }
+        });
+      });
+    });
+  }
+
   function initQuestionFrame() {
+    // Override user-select:none so caretRangeFromPoint works on question text
+    const usSel = document.createElement("style");
+    usSel.textContent = "* { user-select: text !important; -webkit-user-select: text !important; }";
+    (document.head || document.documentElement).appendChild(usSel);
+
     translate();
     startObserver();
+
+    // pointerdown: handles both dismiss and show.
+    // Dismiss first (before any early-return) so clicking outside always closes.
+    // For word clicks, preventDefault() suppresses the click event chain so the
+    // page's checkbox-toggle handler never runs.
+    document.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      const existing = document.getElementById("tth-word-tooltip");
+      if (existing && !existing.contains(e.target)) removeWordTooltip();
+      if (!isQuestionFrame()) return;
+      if (e.target.closest("button, input, select, textarea, a, img, video")) return;
+      const word = wordAt(e.clientX, e.clientY);
+      if (!word || word.length < 2) return;
+      if (word.toLowerCase() === "schliessen") return;
+      e.preventDefault(); // suppresses mousedown → mouseup → click
+      showWordTooltip(word, e.clientX, e.clientY);
+    }, true);
+    window.addEventListener("beforeunload", () => {
+      postToParent({ type: "tth-minimize" });
+    });
   }
 
   // ══════════════════════════════════════════════════════════════════════════
