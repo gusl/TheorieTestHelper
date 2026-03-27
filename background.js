@@ -53,14 +53,16 @@ async function handleTranslateText({ question, answers, imageBase64 }) {
   if (!apiKey) throw new Error("No API key set. Click the extension icon to configure.");
 
   const promptText = answers.length
-    ? `Translate this German driving theory question and its answers to English.
+    ? `Translate this German driving theory question and its answers to English. Keep answers in the same order.
 Question: ${question}
 Answers:
 ${answers.map((a, i) => `${i + 1}. ${a}`).join("\n")}
-Respond ONLY as valid JSON (no markdown): { "question": "...", "answers": ["...", "..."] }`
+Respond ONLY as valid JSON (no markdown): { "question": "...", "answers": ["...", "..."], "glossary": {"GermanWord": "English meaning", ...} }
+The glossary must cover every meaningful content word (nouns, verbs, adjectives, adverbs) that appears in the question and answers, exactly as written. Omit articles, prepositions, and conjunctions.`
     : `Translate this German driving theory question to English.
 Question: ${question}
-Respond ONLY as valid JSON (no markdown): { "question": "...", "answers": [] }`;
+Respond ONLY as valid JSON (no markdown): { "question": "...", "answers": [], "glossary": {"GermanWord": "English meaning", ...} }
+The glossary must cover every meaningful content word (nouns, verbs, adjectives, adverbs) that appears in the question, exactly as written. Omit articles, prepositions, and conjunctions.`;
 
   const imgContent = buildImageContent(imageBase64);
   const content = imgContent ? [imgContent, { type: "text", text: promptText }] : promptText;
@@ -123,6 +125,14 @@ async function handleCaptureTab(sender) {
 
 // ── Flashcard + word-translate handlers ───────────────────────────────────
 
+async function handleTranslateSolution({ text }) {
+  const { apiKey, enabled } = await chrome.storage.local.get(["apiKey", "enabled"]);
+  if (!enabled) throw new Error("TheorieTestHelper is disabled.");
+  if (!apiKey) throw new Error("No API key set.");
+  const prompt = `Translate this German driving theory explanation to English. Respond ONLY as valid JSON: { "solution": "..." }\n\n${text}`;
+  return callOpenAI(apiKey, prompt);
+}
+
 async function handleWordTranslate({ word, germanContext, englishContext }) {
   const { apiKey, enabled } = await chrome.storage.local.get(["apiKey", "enabled"]);
   if (!enabled) throw new Error("TheorieTestHelper is disabled.");
@@ -165,10 +175,46 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return handleChat(message);
       case "capture-tab":
         return handleCaptureTab(sender);
+      case "translate-solution": return handleTranslateSolution(message);
       case "word-translate":    return handleWordTranslate(message);
       case "add-flashcard":     return handleAddFlashcard(message);
       case "get-flashcards":    return handleGetFlashcards();
       case "remove-flashcard":  return handleRemoveFlashcard(message);
+      case "enyo-toggle":
+        // Fire the Enyo tap event from the t24qachk sub-component in the page's
+        // main world. This replicates a real user click exactly: the ontap on
+        // t24qachk calls toggleCheckmark() on t24answer, then bubbles up to
+        // CoreTestingDisplay.tapButtonChkboxAnswer() which calls saveUserAnswer().
+        await chrome.scripting.executeScript({
+          target: { tabId: sender.tab.id, frameIds: [sender.frameId] },
+          world: "MAIN",
+          func: (compId) => {
+            try {
+              var c = typeof enyo !== "undefined" && enyo.$ && enyo.$[compId];
+              if (c && c.$ && c.$.t24qachk && typeof c.$.t24qachk.bubble === "function") {
+                c.$.t24qachk.bubble("ontap", {});
+              }
+            } catch (e) {}
+          },
+          args: [message.compId],
+        });
+        return {};
+      case "enyo-btn-tap":
+        // Fire an Enyo ontap event on an action button (Abbrechen / ★ / Auflösung)
+        // from the page's main world. .click() is insufficient — Enyo synthesizes
+        // tap from mousedown+mouseup, not from click events.
+        await chrome.scripting.executeScript({
+          target: { tabId: sender.tab.id, frameIds: [sender.frameId] },
+          world: "MAIN",
+          func: (compId) => {
+            try {
+              var c = typeof enyo !== "undefined" && enyo.$ && enyo.$[compId];
+              if (c && typeof c.bubble === "function") c.bubble("ontap", {});
+            } catch (e) {}
+          },
+          args: [message.compId],
+        });
+        return {};
       default:
         throw new Error("Unknown message type: " + message.type);
     }

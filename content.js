@@ -13,6 +13,14 @@
   const SEL_ANSWERS        = "[id$='_answertext']";
   const SEL_ANSWER_STEM    = "#app_TestingPage_CoreTestingDisplay_t24qhint1";
   const SEL_QUESTION_IMAGE = "#app_TestingPage_CoreTestingDisplay_t24qpic img";
+  // Solution/explanation text shown after clicking Auflösung — selector TBD, tries multiple candidates
+  const SEL_SOLUTION_CANDIDATES = [
+    "#app_TestingPage_CoreTestingDisplay_t24qhint2",
+    "#app_TestingPage_CoreTestingDisplay_t24solution",
+    "#app_TestingPage_CoreTestingDisplay_t24qerkl",
+    "[id*='solution']:not([id*='btn']):not([id*='button'])",
+    "[id*='erkl']:not([id*='btn'])",
+  ];
   const MSG_PREFIX   = "tth-";
 
   // ── Utilities ─────────────────────────────────────────────────────────────
@@ -38,6 +46,7 @@
   // ══════════════════════════════════════════════════════════════════════════
 
   let _shadow = null;
+  let _questionFrameWindow = null;
   let _lastTranslation = null;
   let _chatHistory = [];      // [{role, content}, …]
   let _chatContext  = "";     // system-message text built from current question
@@ -160,6 +169,25 @@
           color: #1f2937;
         }
         .ans-label { font-weight: 700; color: #3b82f6; margin-right: 4px; }
+        #tth-answers li { cursor: pointer; }
+        #tth-answers li:hover { background: #e0e7ff; border-color: #a5b4fc; }
+        #tth-answers li.tth-checked { background: #dcfce7; border-color: #86efac; }
+        .tth-ans-cb { margin-right: 6px; pointer-events: none; }
+        #tth-action-btns { display: flex; gap: 6px; margin-top: 6px; }
+        .tth-action-btn { border: none; border-radius: 5px; padding: 5px 10px; font: 600 12px/1 system-ui, sans-serif; cursor: pointer; }
+        #tth-cancel-btn { background: #ef4444; color: #fff; }
+        #tth-mark-btn { background: #f59e0b; color: #fff; }
+        #tth-solution-btn { background: #22c55e; color: #fff; }
+        #tth-solution {
+          display: none; padding: 8px 14px; background: #f0fdf4;
+          border-top: 1px solid #86efac; font: 12px/1.5 system-ui, sans-serif;
+          color: #166534; flex-shrink: 0; overflow-y: auto; max-height: 120px;
+        }
+        #tth-explanation {
+          display: none; padding: 8px 14px; background: #eff6ff;
+          border-top: 1px solid #bfdbfe; font: 12px/1.5 system-ui, sans-serif;
+          color: #1e40af; flex-shrink: 0; overflow-y: auto; max-height: 120px;
+        }
         #tth-footer {
           display: none;
           border-top: 1px solid #e5e7eb;
@@ -379,7 +407,14 @@
         </div>
         <div id="tth-footer">
           <button id="tth-ask-ai" class="tth-ask-btn">Ask the AI</button>
+          <div id="tth-action-btns" style="display:none">
+            <button id="tth-cancel-btn" class="tth-action-btn">Cancel</button>
+            <button id="tth-mark-btn" class="tth-action-btn">★</button>
+            <button id="tth-solution-btn" class="tth-action-btn">Show Solution</button>
+          </div>
         </div>
+        <div id="tth-solution"></div>
+        <div id="tth-explanation"></div>
         <div id="tth-chat">
           <div id="tth-chat-bar">
             <button id="tth-back-btn">← Back</button>
@@ -596,6 +631,8 @@ In your very first response, start with either "I can see the image." or "I don'
     const s = getShadow();
     s.getElementById("tth-spinner").style.display = "none";
     s.getElementById("tth-error").style.display = "none";
+    s.getElementById("tth-solution").style.display = "none";
+    s.getElementById("tth-explanation").style.display = "none";
     // Show footer with Ask button only for MC questions; reset any prior ask result
     const footer = s.getElementById("tth-footer");
     // Close chat if open (new question arrived)
@@ -612,12 +649,14 @@ In your very first response, start with either "I can see the image." or "I don'
     const content = s.getElementById("tth-content");
     if (answers.length) {
       const answersHtml = answers
-        .map((a, i) => `<li><span class="ans-label">${String.fromCharCode(65 + i)}.</span>${escapeHtml(a)}</li>`)
+        .map((a, i) => `<li data-idx="${i}"><input type="checkbox" class="tth-ans-cb"><span class="ans-label">${String.fromCharCode(65 + i)}.</span>${escapeHtml(a)}</li>`)
         .join("");
       content.innerHTML = `<p id="tth-question">${escapeHtml(question)}</p><ul id="tth-answers">${answersHtml}</ul>`;
+      s.getElementById("tth-action-btns").style.display = "flex";
     } else {
       content.innerHTML = `<p id="tth-question" style="flex:1;border-right:none;">${escapeHtml(question)}</p>
                            <p id="tth-numeric-note" style="font-style:italic;color:#6b7280;font-size:12px;align-self:center;">(numeric answer)</p>`;
+      s.getElementById("tth-action-btns").style.display = "none";
     }
     content.style.display = "flex";
   }
@@ -691,18 +730,96 @@ In your very first response, start with either "I can see the image." or "I don'
     _shadow.getElementById("tth-toggle").textContent = "EN ▲";
   }
 
+  function postToQuestionFrame(msg) {
+    if (_questionFrameWindow) {
+      try { _questionFrameWindow.postMessage(msg, "*"); return; } catch(_) {}
+    }
+    // Fallback: broadcast to all iframes
+    document.querySelectorAll("iframe").forEach(f => {
+      try { f.contentWindow.postMessage(msg, "*"); } catch(_) {}
+    });
+  }
+
+  function updateEnglishCheckboxes(states) {
+    const s = getShadow();
+    s.querySelectorAll("#tth-answers li[data-idx]").forEach(li => {
+      const checked = !!states[+li.dataset.idx];
+      li.querySelector(".tth-ans-cb").checked = checked;
+      li.classList.toggle("tth-checked", checked);
+    });
+  }
+
+  function showSolutionTranslation(germanText) {
+    const s = getShadow();
+    const el = s.getElementById("tth-solution");
+    el.style.display = "block";
+    el.textContent = "Translating solution…";
+    chrome.runtime.sendMessage({ type: "translate-solution", text: germanText }, resp => {
+      if (chrome.runtime.lastError || resp?.error) {
+        el.textContent = "(Could not translate solution)";
+      } else {
+        el.textContent = "💡 " + (resp.solution ?? germanText);
+      }
+    });
+  }
+
+  function showExplanationTranslation(germanText) {
+    const s = getShadow();
+    const el = s.getElementById("tth-explanation");
+    el.style.display = "block";
+    el.textContent = "Translating explanation…";
+    chrome.runtime.sendMessage({ type: "translate-solution", text: germanText }, resp => {
+      if (!el.isConnected) return;
+      if (chrome.runtime.lastError || resp?.error) {
+        el.textContent = "(Could not translate explanation)";
+      } else {
+        el.textContent = "📖 " + (resp.solution ?? germanText);
+      }
+    });
+  }
+
   function initParentFrame() {
     pushContentLeft();
     window.addEventListener("message", (event) => {
       const data = event.data;
       if (!data?.type?.startsWith(MSG_PREFIX)) return;
+      _questionFrameWindow = event.source;
       switch (data.type) {
         case "tth-spinner":     showSpinner(); break;
         case "tth-translation": showTranslation(data.question, data.answers, data.imageBase64); break;
         case "tth-info":        showInfo(data.message); break;
         case "tth-error":       showError(data.message); break;
         case "tth-minimize":    minimizePanel(); break;
+        case "tth-check-state":   updateEnglishCheckboxes(data.states); break;
+        case "tth-solution-text": showSolutionTranslation(data.text); break;
+        case "tth-explanation":   showExplanationTranslation(data.text); break;
+        case "tth-btn-label":
+          s.getElementById("tth-solution-btn").textContent =
+            data.label === "next" ? "Next Question" : "Show Solution";
+          break;
       }
+    });
+
+    const s = getShadow();
+    s.getElementById("tth-body").addEventListener("click", e => {
+      const li = e.target.closest("li[data-idx]");
+      if (!li) return;
+      const idx = +li.dataset.idx;
+      // Optimistic toggle
+      const cb = li.querySelector(".tth-ans-cb");
+      const nowChecked = !cb.checked;
+      cb.checked = nowChecked;
+      li.classList.toggle("tth-checked", nowChecked);
+      postToQuestionFrame({ type: "tth-cmd", action: "click-answer", index: idx });
+    });
+    s.getElementById("tth-cancel-btn").addEventListener("click", () => {
+      postToQuestionFrame({ type: "tth-cmd", action: "abbrechen" });
+    });
+    s.getElementById("tth-mark-btn").addEventListener("click", () => {
+      postToQuestionFrame({ type: "tth-cmd", action: "markieren" });
+    });
+    s.getElementById("tth-solution-btn").addEventListener("click", () => {
+      postToQuestionFrame({ type: "tth-cmd", action: "aufloesung" });
     });
   }
 
@@ -747,7 +864,14 @@ In your very first response, start with either "I can see the image." or "I don'
         canvas.height = video.videoHeight;
         canvas.getContext("2d").drawImage(video, 0, 0);
         return canvas.toDataURL("image/jpeg", 0.85).split(",")[1];
-      } catch (e) { /* tainted — fall through */ }
+      } catch (e) {
+        console.log("[TTH] captureVisual: video canvas tainted, requesting tab screenshot");
+        const res = await Promise.race([
+          new Promise(resolve => chrome.runtime.sendMessage({ type: "capture-tab" }, resolve)),
+          new Promise(resolve => setTimeout(() => resolve(null), 5000)),
+        ]);
+        return res?.dataUrl || null;
+      }
     }
     return null;
   }
@@ -839,6 +963,7 @@ In your very first response, start with either "I can see the image." or "I don'
             return;
           }
           _lastEnglish = { question: response.question, answers: response.answers };
+          _wordGlossary = response.glossary || {};
           postToParent({ type: "tth-translation", question: response.question, answers: response.answers, imageBase64 });
         }
       );
@@ -855,6 +980,7 @@ In your very first response, start with either "I can see the image." or "I don'
   let _translateSeq = 0;     // incremented on each translate() call; guards stale callbacks
   let _lastGerman  = null;   // { question, answers } — raw German text from last parse
   let _lastEnglish = null;   // { question, answers } — English translation of same question
+  let _wordGlossary = {};    // { GermanWord: "English meaning" } from last translation
 
   function onMutation() {
     clearTimeout(debounceTimer);
@@ -960,14 +1086,15 @@ In your very first response, start with either "I can see the image." or "I don'
       }
     }
 
-    chrome.runtime.sendMessage({ type: "word-translate", word, germanContext, englishContext }, (res) => {
+    // Glossary lookup first — instant, no API call
+    const glossaryKey = Object.keys(_wordGlossary).find(
+      k => k.toLowerCase() === word.toLowerCase()
+    );
+
+    function populateTooltip(translation) {
       if (!tip.isConnected) return;
       const transInput = tip.querySelector(".ttw-trans");
-      if (res?.error || !res?.translation) {
-        transInput.placeholder = res?.error || "Translation failed.";
-        return;
-      }
-      transInput.value = res.translation;
+      transInput.value = translation;
       transInput.disabled = false;
       const addBtn = tip.querySelector(".ttw-add");
       addBtn.disabled = false;
@@ -982,7 +1109,64 @@ In your very first response, start with either "I can see the image." or "I don'
           }
         });
       });
+    }
+
+    if (glossaryKey) {
+      populateTooltip(_wordGlossary[glossaryKey]);
+    } else {
+      chrome.runtime.sendMessage({ type: "word-translate", word, germanContext, englishContext }, (res) => {
+        if (!tip.isConnected) return;
+        if (res?.error || !res?.translation) {
+          tip.querySelector(".ttw-trans").placeholder = res?.error || "Translation failed.";
+          return;
+        }
+        populateTooltip(res.translation);
+      });
+    }
+  }
+
+  function findButtonByText(text) {
+    return Array.from(document.querySelectorAll('button, [role="button"]'))
+      .find(el => el.textContent.trim() === text);
+  }
+
+  function visibleAnswerEls() {
+    return Array.from(document.querySelectorAll(SEL_ANSWERS)).filter(el => {
+      if (el.hidden) return false;
+      const cs = getComputedStyle(el);
+      if (cs.display === "none" || cs.visibility === "hidden" || cs.visibility === "collapse") return false;
+      if (el.getBoundingClientRect().height === 0) return false;
+      return true;
     });
+  }
+
+  function getCheckedStates() {
+    return visibleAnswerEls().map(el => {
+      let cur = el;
+      for (let i = 0; i < 4 && cur; i++) {
+        const input = cur.querySelector?.("input[type='checkbox'], input[type='radio']");
+        if (input) return input.checked;
+        if (cur.tagName === "INPUT") return cur.checked;
+        if (cur.getAttribute?.("aria-checked") === "true") return true;
+        if (cur.getAttribute?.("aria-selected") === "true") return true;
+        const cl = cur.classList;
+        if (cl?.contains("checked") || cl?.contains("selected") || cl?.contains("active") ||
+            cl?.contains("correct") || cl?.contains("chosen") || cl?.contains("marked")) return true;
+        // theorie24.de / Enyo: checked state is shown via background GIF on a sibling .t24qachk element
+        const t24chk = cur.querySelector?.(".t24qachk");
+        if (t24chk) {
+          const bg = t24chk.getAttribute?.("style") || "";
+          const m  = bg.match(/btn_optquestion_(\d+)\.gif/);
+          if (m) return parseInt(m[1], 10) > 1;
+        }
+        cur = cur.parentElement;
+      }
+      return false;
+    });
+  }
+
+  function postCheckState() {
+    postToParent({ type: "tth-check-state", states: getCheckedStates() });
   }
 
   function initQuestionFrame() {
@@ -994,16 +1178,110 @@ In your very first response, start with either "I can see the image." or "I don'
     translate();
     startObserver();
 
+    // Poll t24btnnext for "Auflösung" ↔ "Weiter" label changes.
+    // MutationObserver is unreliable here because Enyo mutates in the main world.
+    {
+      let lastBtnLabel = null;
+      setInterval(() => {
+        const nextBtnEl = document.getElementById("app_TestingPage_CoreTestingDisplay_t24btnnext");
+        if (!nextBtnEl) return;
+        const span = nextBtnEl.querySelector("span");
+        const label = (span?.textContent || nextBtnEl.textContent || "").trim();
+        if (!label || label === lastBtnLabel) return;
+        lastBtnLabel = label;
+        if (label === "Weiter") postToParent({ type: "tth-btn-label", label: "next" });
+        else if (label === "Auflösung") postToParent({ type: "tth-btn-label", label: "solution" });
+      }, 300);
+    }
+
+    // Poll for "Erklärung zur Frage" explanation dialog visibility.
+    // Polling is more reliable than MutationObserver here because Enyo mutates
+    // the DOM in the main world; attribute changes on #alert may not fire
+    // observers in the isolated content-script world.
+    {
+      let lastExplText = null;
+      setInterval(() => {
+        const alertEl = document.getElementById("alert");
+        if (!alertEl || getComputedStyle(alertEl).display === "none") {
+          lastExplText = null; // reset so re-opening the dialog re-triggers translation
+          return;
+        }
+        const alertMsg = document.getElementById("alert_message");
+        if (!alertMsg) return;
+        const raw = alertMsg.innerText || "";
+        const text = raw
+          .split("\n")
+          .map(l => l.trim())
+          .filter(l => l && l !== "Erklärung zur Frage" && !/^[Ss]chliessen$/.test(l))
+          .join("\n")
+          .trim();
+        if (!text || text.length < 5 || text === lastExplText) return;
+        lastExplText = text;
+        postToParent({ type: "tth-explanation", text });
+      }, 500);
+    }
+
+    // Listen for commands from the parent frame (English sidebar)
+    window.addEventListener("message", e => {
+      if (e.data?.type !== "tth-cmd") return;
+      const { action, index } = e.data;
+      if (action === "click-answer") {
+        const els = visibleAnswerEls();
+        const el = els[index];
+        if (el) {
+          // theorie24.de uses Enyo.js: no native inputs, state lives in the Enyo
+          // component API. Content scripts run in an isolated world and cannot
+          // access window.enyo directly. Ask the background service worker to
+          // call chrome.scripting.executeScript with world:"MAIN" instead.
+          const compId = el.id.replace(/_answertext$/, '');
+          chrome.runtime.sendMessage({ type: "enyo-toggle", compId });
+          // Do NOT call postCheckState here: the optimistic English update already
+          // reflects the intended state; German→English sync for real clicks is
+          // handled by the trusted-click listener below.
+        }
+      } else if (action === "abbrechen") {
+        chrome.runtime.sendMessage({
+          type: "enyo-btn-tap",
+          compId: "app_TestingPage_CoreTestingDisplay_t24btneval",
+        });
+      } else if (action === "markieren") {
+        chrome.runtime.sendMessage({
+          type: "enyo-btn-tap",
+          compId: "app_TestingPage_CoreTestingDisplay_t24btnmark",
+        });
+      } else if (action === "aufloesung") {
+        chrome.runtime.sendMessage(
+          { type: "enyo-btn-tap", compId: "app_TestingPage_CoreTestingDisplay_t24btnnext" },
+          () => {
+            setTimeout(postCheckState, 300);
+            setTimeout(() => {
+              const text = SEL_SOLUTION_CANDIDATES
+                .map(sel => document.querySelector(sel)?.textContent?.trim())
+                .find(t => t && t.length > 5);
+              if (text) postToParent({ type: "tth-solution-text", text });
+            }, 600);
+          }
+        );
+      }
+    });
+
+    // Sync English checkboxes when user clicks German answers directly
+    document.addEventListener("click", (e) => {
+      if (!e.isTrusted) return;
+      if (visibleAnswerEls().length > 0) setTimeout(postCheckState, 50);
+    }, true);
+
     // pointerdown: handles both dismiss and show.
     // Dismiss first (before any early-return) so clicking outside always closes.
     // For word clicks, preventDefault() suppresses the click event chain so the
     // page's checkbox-toggle handler never runs.
     document.addEventListener("pointerdown", (e) => {
       if (e.button !== 0) return;
+      if (!e.isTrusted) return; // ignore synthetic pointerdowns we dispatch ourselves
       const existing = document.getElementById("tth-word-tooltip");
       if (existing && !existing.contains(e.target)) removeWordTooltip();
       if (!isQuestionFrame()) return;
-      if (e.target.closest("button, input, select, textarea, a, img, video")) return;
+      if (e.target.closest("button, input, select, textarea, a, img, video, [role='button']")) return;
       const word = wordAt(e.clientX, e.clientY);
       if (!word || word.length < 2) return;
       if (word.toLowerCase() === "schliessen") return;
